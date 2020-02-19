@@ -9,6 +9,8 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.net.wifi.WifiManager;
+import android.view.WindowManager;
+import android.util.DisplayMetrics;
 import android.net.wifi.WifiInfo;
 import android.os.Build;
 import android.provider.Settings.Secure;
@@ -37,10 +39,12 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
 
   WifiInfo wifiInfo;
 
+  DeviceType deviceType;
   public RNDeviceModule(ReactApplicationContext reactContext) {
     super(reactContext);
 
     this.reactContext = reactContext;
+    this.deviceType = getDeviceType(reactContext);
   }
 
   @Override
@@ -57,18 +61,18 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
   }
 
   private String getCurrentLanguage() {
-      Locale current = getReactApplicationContext().getResources().getConfiguration().locale;
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-          return current.toLanguageTag();
-      } else {
-          StringBuilder builder = new StringBuilder();
-          builder.append(current.getLanguage());
-          if (current.getCountry() != null) {
-              builder.append("-");
-              builder.append(current.getCountry());
-          }
-          return builder.toString();
+    Locale current = getReactApplicationContext().getResources().getConfiguration().locale;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      return current.toLanguageTag();
+    } else {
+      StringBuilder builder = new StringBuilder();
+      builder.append(current.getLanguage());
+      if (current.getCountry() != null) {
+        builder.append("-");
+        builder.append(current.getCountry());
       }
+      return builder.toString();
+    }
   }
 
   private String getCurrentCountry() {
@@ -78,22 +82,92 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
 
   private Boolean isEmulator() {
     return Build.FINGERPRINT.startsWith("generic")
-      || Build.FINGERPRINT.startsWith("unknown")
-      || Build.MODEL.contains("google_sdk")
-      || Build.MODEL.contains("Emulator")
-      || Build.MODEL.contains("Android SDK built for x86")
-      || Build.MANUFACTURER.contains("Genymotion")
-      || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"))
-      || "google_sdk".equals(Build.PRODUCT);
+            || Build.FINGERPRINT.startsWith("unknown")
+            || Build.MODEL.contains("google_sdk")
+            || Build.MODEL.toLowerCase().contains("droid4x")
+            || Build.MODEL.contains("Emulator")
+            || Build.MODEL.contains("Android SDK built for x86")
+            || Build.MANUFACTURER.contains("Genymotion")
+            || Build.HARDWARE.contains("goldfish")
+            || Build.HARDWARE.contains("ranchu")
+            || Build.HARDWARE.contains("vbox86")
+            || Build.PRODUCT.contains("sdk")
+            || Build.PRODUCT.contains("google_sdk")
+            || Build.PRODUCT.contains("sdk_google")
+            || Build.PRODUCT.contains("sdk_x86")
+            || Build.PRODUCT.contains("vbox86p")
+            || Build.PRODUCT.contains("emulator")
+            || Build.PRODUCT.contains("simulator")
+            || Build.BOARD.toLowerCase().contains("nox")
+            || Build.BOOTLOADER.toLowerCase().contains("nox")
+            || Build.HARDWARE.toLowerCase().contains("nox")
+            || Build.PRODUCT.toLowerCase().contains("nox")
+            || Build.SERIAL.toLowerCase().contains("nox")
+            || (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic"));
   }
 
   private Boolean isTablet() {
-    int layout = getReactApplicationContext().getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK;
-    return layout == Configuration.SCREENLAYOUT_SIZE_LARGE || layout == Configuration.SCREENLAYOUT_SIZE_XLARGE;
+    return deviceType == DeviceType.TABLET;
   }
 
   private Boolean is24Hour() {
     return android.text.format.DateFormat.is24HourFormat(this.reactContext.getApplicationContext());
+  }
+
+  private static DeviceType getDeviceType(ReactApplicationContext reactContext) {
+    DeviceType deviceTypeFromConfig = getDeviceTypeFromResourceConfiguration(reactContext);
+
+    if (deviceTypeFromConfig != null && deviceTypeFromConfig != DeviceType.UNKNOWN) {
+      return deviceTypeFromConfig;
+    }
+
+    return  getDeviceTypeFromPhysicalSize(reactContext);
+  }
+
+  // Use `smallestScreenWidthDp` to determine the screen size
+  // https://android-developers.googleblog.com/2011/07/new-tools-for-managing-screen-sizes.html
+  private  static  DeviceType getDeviceTypeFromResourceConfiguration(ReactApplicationContext reactContext) {
+    int smallestScreenWidthDp = reactContext.getResources().getConfiguration().smallestScreenWidthDp;
+
+    if (smallestScreenWidthDp == Configuration.SMALLEST_SCREEN_WIDTH_DP_UNDEFINED) {
+      return  DeviceType.UNKNOWN;
+    }
+
+    return  smallestScreenWidthDp >= 600 ? DeviceType.TABLET : DeviceType.HANDSET;
+  }
+
+  private static DeviceType getDeviceTypeFromPhysicalSize(ReactApplicationContext reactContext) {
+    // Find the current window manager, if none is found we can't measure the device physical size.
+    WindowManager windowManager = (WindowManager) reactContext.getSystemService(Context.WINDOW_SERVICE);
+
+    if (windowManager == null) {
+      return DeviceType.UNKNOWN;
+    }
+
+    // Get display metrics to see if we can differentiate handsets and tablets.
+    // NOTE: for API level 16 the metrics will exclude window decor.
+    DisplayMetrics metrics = new DisplayMetrics();
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+      windowManager.getDefaultDisplay().getRealMetrics(metrics);
+    } else {
+      windowManager.getDefaultDisplay().getMetrics(metrics);
+    }
+
+    // Calculate physical size.
+    double widthInches = metrics.widthPixels / (double) metrics.xdpi;
+    double heightInches = metrics.heightPixels / (double) metrics.ydpi;
+    double diagonalSizeInches = Math.sqrt(Math.pow(widthInches, 2) + Math.pow(heightInches, 2));
+
+    if (diagonalSizeInches >= 3.0 && diagonalSizeInches <= 6.9) {
+      // Devices in a sane range for phones are considered to be Handsets.
+      return DeviceType.HANDSET;
+    } else if (diagonalSizeInches > 6.9 && diagonalSizeInches <= 18.0) {
+      // Devices larger than handset and in a sane range for tablets are tablets.
+      return DeviceType.TABLET;
+    } else {
+      // Otherwise, we don't know what device type we're on/
+      return DeviceType.UNKNOWN;
+    }
   }
 
   @ReactMethod
@@ -126,7 +200,7 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
 
     PackageManager packageManager = this.reactContext.getPackageManager();
     String packageName = this.reactContext.getPackageName();
-    
+
     constants.put("appVersion", "not available");
     constants.put("appName", "not available");
     constants.put("buildVersion", "not available");
@@ -194,11 +268,11 @@ public class RNDeviceModule extends ReactContextBaseJavaModule {
     constants.put("isTablet", this.isTablet());
     constants.put("is24Hour", this.is24Hour());
     if (getCurrentActivity() != null &&
-          (getCurrentActivity().checkCallingOrSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED ||
-            getCurrentActivity().checkCallingOrSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED ||
-            getCurrentActivity().checkCallingOrSelfPermission("android.permission.READ_PHONE_NUMBERS") == PackageManager.PERMISSION_GRANTED)) {
-        TelephonyManager telMgr = (TelephonyManager) this.reactContext.getApplicationContext().getSystemService(Context.TELEPHONY_SERVICE);
-        constants.put("phoneNumber", telMgr.getLine1Number());
+            (getCurrentActivity().checkCallingOrSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED ||
+                    getCurrentActivity().checkCallingOrSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED ||
+                    getCurrentActivity().checkCallingOrSelfPermission("android.permission.READ_PHONE_NUMBERS") == PackageManager.PERMISSION_GRANTED)) {
+      TelephonyManager telMgr = (TelephonyManager) this.reactContext.getApplicationContext().getSystemService(Context.TELEPHONY_SERVICE);
+      constants.put("phoneNumber", telMgr.getLine1Number());
     }
     constants.put("carrier", this.getCarrier());
 
